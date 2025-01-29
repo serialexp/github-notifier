@@ -9,7 +9,9 @@
 	},
 	"scripts": {
 		"build": "esbuild index.tsx --bundle --platform=node --outfile=dist/index.js --external:react --external:ink --external:@octokit/rest --external:conf --external:ink-spinner --external:javascript-time-ago --external:marked --external:marked-terminal --external:open --external:p-queue",
-		"prepare": "npm run build"
+		"prepare": "npm run build",
+		"test": "vitest run",
+		"test:watch": "vitest"
 	},
 	"keywords": ["github", "notifications", "cli", "terminal", "ui", "tui"],
 	"author": "Bart Riepe",
@@ -19,12 +21,15 @@
 		"url": "https://github.com/serialexp/github-notifier.git"
 	},
 	"devDependencies": {
+		"@testing-library/react": "^14.2.1",
 		"@types/marked-terminal": "^6.1.1",
 		"@types/react": "^18.3.18",
+		"@vitest/ui": "^1.3.1",
 		"bun-types": "latest",
 		"esbuild": "^0.20.1",
 		"esbuild-register": "^3.5.0",
-		"typescript": "^5.3.3"
+		"typescript": "^5.3.3",
+		"vitest": "^1.3.1"
 	},
 	"dependencies": {
 		"@octokit/rest": "^21.1.0",
