@@ -1,4 +1,5 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node --experimental-specifier-resolution=node
+// @ts-ignore - Needed for Node.js execution
 import React, { useState, useEffect, useCallback } from "react";
 import { Box, Text, render, useStdout, useInput } from "ink";
 import Spinner from "ink-spinner";

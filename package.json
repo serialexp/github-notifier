@@ -8,7 +8,7 @@
 		"github-notifier": "./dist/index.js"
 	},
 	"scripts": {
-		"build": "esbuild index.tsx --bundle --platform=node --outfile=dist/index.js --external:react --external:ink --external:@octokit/rest --external:conf --external:ink-spinner --external:javascript-time-ago --external:marked --external:marked-terminal --external:open --external:p-queue",
+		"build": "esbuild index.tsx --bundle --platform=node --format=esm --outfile=dist/index.js --external:react --external:ink --external:@octokit/rest --external:conf --external:ink-spinner --external:javascript-time-ago --external:marked --external:marked-terminal --external:open --external:p-queue",
 		"prepare": "npm run build",
 		"test": "vitest run",
 		"test:watch": "vitest"
