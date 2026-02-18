@@ -13,6 +13,7 @@ import { marked } from "marked";
 import { markedTerminal } from "marked-terminal";
 import chalk from "chalk";
 import PQueue from "p-queue";
+import { getWebUrl } from "./src/utils";
 
 // Initialize TimeAgo and marked
 TimeAgo.addDefaultLocale(en);
@@ -125,6 +126,24 @@ interface TimelineItem {
 	created_at: string;
 }
 
+interface GitHubReviewComment {
+	path: string;
+	line?: number;
+	body: string;
+	user: {
+		login: string;
+	};
+	created_at: string;
+}
+
+interface GitHubDiscussionComment {
+	author: {
+		login: string;
+	};
+	body: string;
+	createdAt: string;
+}
+
 const TokenPrompt = ({ onToken }: { onToken: (token: string) => void }) => {
 	const [input, setInput] = useState("");
 
@@ -147,18 +166,6 @@ const TokenPrompt = ({ onToken }: { onToken: (token: string) => void }) => {
 			</Text>
 		</Box>
 	);
-};
-
-const getWebUrl = (notification: GitHubNotification): string => {
-	// The API URL format is: https://api.github.com/repos/owner/repo/[issues|pulls]/number
-	// We need to transform it to: https://github.com/owner/repo/[issues|pull]/number
-	const url = notification.subject.url;
-	const htmlUrl = url
-		.replace("api.github.com/repos", "github.com")
-		.replace("pulls", "pull");
-
-	// Remove any trailing API-specific parts (like /comments, etc)
-	return htmlUrl.replace(/\/(comments|reviews|review_comments)$/, "");
 };
 
 const formatEvent = (event: GitHubEvent): string => {
@@ -277,8 +284,112 @@ const NotificationContent = ({
 				let allComments: GitHubComment[] = [];
 				let allEvents: GitHubEvent[] = [];
 
-				// Fetch all comments if they exist
-				if (data.comments_url) {
+				// Fetch all comments based on notification type
+				if (notification.subject.type === "PullRequest") {
+					// Fetch PR comments (issue comments)
+					const prCommentsUrl = data.comments_url;
+					// Fetch PR review comments
+					const reviewCommentsUrl =
+						data._links?.review_comments?.href || data.review_comments_url;
+
+					let page = 1;
+					const perPage = 100;
+
+					// Fetch issue comments
+					while (true) {
+						const commentsUrl = `${prCommentsUrl}?per_page=${perPage}&page=${page}`;
+						const commentsResponse = await fetch(commentsUrl, { headers });
+						const comments = await commentsResponse.json();
+
+						if (!Array.isArray(comments) || comments.length === 0) break;
+						allComments = [...allComments, ...comments];
+
+						if (comments.length < perPage) break;
+						page++;
+					}
+
+					// Fetch review comments if available
+					if (reviewCommentsUrl) {
+						page = 1;
+						while (true) {
+							const reviewCommentsUrl2 = `${reviewCommentsUrl}?per_page=${perPage}&page=${page}`;
+							const reviewCommentsResponse = await fetch(reviewCommentsUrl2, {
+								headers,
+							});
+							const reviewComments = await reviewCommentsResponse.json();
+
+							if (!Array.isArray(reviewComments) || reviewComments.length === 0)
+								break;
+
+							// Convert review comments to regular comment format
+							const formattedReviewComments = reviewComments.map(
+								(comment: GitHubReviewComment) => ({
+									body: `**Review comment on ${comment.path}${comment.line ? ` line ${comment.line}` : ""}:**\n\n${comment.body}`,
+									user: comment.user,
+									created_at: comment.created_at,
+								}),
+							);
+
+							allComments = [...allComments, ...formattedReviewComments];
+
+							if (reviewComments.length < perPage) break;
+							page++;
+						}
+					}
+				} else if (notification.subject.type === "Discussion") {
+					// Fetch discussion comments using the GraphQL API
+					const [owner, repo] = notification.repository.full_name.split("/");
+					const discussionNumber = data.number;
+
+					const graphqlQuery = {
+						query: `
+							query($owner: String!, $repo: String!, $number: Int!) {
+								repository(owner: $owner, name: $repo) {
+									discussion(number: $number) {
+										comments(first: 100) {
+											nodes {
+												author { login }
+												body
+												createdAt
+											}
+										}
+									}
+								}
+							}
+						`,
+						variables: {
+							owner,
+							repo,
+							number: discussionNumber,
+						},
+					};
+
+					const graphqlResponse = await fetch(
+						"https://api.github.com/graphql",
+						{
+							method: "POST",
+							headers: {
+								...headers,
+								"Content-Type": "application/json",
+							},
+							body: JSON.stringify(graphqlQuery),
+						},
+					);
+
+					const graphqlData = await graphqlResponse.json();
+					const discussionComments =
+						graphqlData.data?.repository?.discussion?.comments?.nodes || [];
+
+					// Convert discussion comments to regular comment format
+					allComments = discussionComments.map(
+						(comment: GitHubDiscussionComment) => ({
+							body: comment.body,
+							user: { login: comment.author.login },
+							created_at: comment.createdAt,
+						}),
+					);
+				} else if (data.comments_url) {
+					// Regular issue comments
 					let page = 1;
 					const perPage = 100;
 
@@ -295,8 +406,11 @@ const NotificationContent = ({
 					}
 				}
 
-				// Fetch all events
-				if (notification.subject.type === "Issue") {
+				// Fetch events for issues and PRs
+				if (
+					notification.subject.type === "Issue" ||
+					notification.subject.type === "PullRequest"
+				) {
 					const eventsUrl = notification.subject.url.replace(/\/?$/, "/events");
 					let page = 1;
 					const perPage = 100;
@@ -659,6 +773,8 @@ const CustomSelect = ({
 	onMarkAsRead,
 	onMarkGroupAsRead,
 	onOpenInBrowser,
+	onForceRefresh,
+	isRefreshing,
 	limit,
 	initialSelectedIndex = 0,
 	initialStartIndex = 0,
@@ -672,6 +788,8 @@ const CustomSelect = ({
 		notifications: GitHubNotification[],
 	) => Promise<void>;
 	onOpenInBrowser: (item: Item) => void;
+	onForceRefresh: () => void;
+	isRefreshing: boolean;
 	limit: number;
 	initialSelectedIndex?: number;
 	initialStartIndex?: number;
@@ -771,6 +889,8 @@ const CustomSelect = ({
 			) {
 				onOpenInBrowser(selectedItem);
 			}
+		} else if (input === "r" && !isRefreshing) {
+			onForceRefresh();
 		}
 	});
 
@@ -825,8 +945,8 @@ const CustomSelect = ({
 							{startIndex + limit < totalItems && " ↓"} •{" "}
 						</>
 					)}
-					Enter to view • → to mark as read • o to open in browser • ↑/↓ or j/k
-					to navigate • q to quit
+					Enter to view • → to mark as read • o to open in browser • r to
+					refresh • ↑/↓ or j/k to navigate • q to quit
 				</Text>
 			</Box>
 		</Box>
@@ -842,6 +962,8 @@ const NotificationList = ({
 	startIndex = 0,
 	onIndexChange,
 	currentUser,
+	onForceRefresh,
+	isRefreshing,
 }: {
 	groups: NotificationGroup[];
 	onSelect: (notification: GitHubNotification) => void;
@@ -851,6 +973,8 @@ const NotificationList = ({
 	startIndex?: number;
 	onIndexChange?: (selectedIndex: number, startIndex: number) => void;
 	currentUser: { login: string } | null;
+	onForceRefresh: () => void;
+	isRefreshing: boolean;
 }) => {
 	const { stdout } = useStdout();
 	const maxVisibleItems = stdout.rows - 3;
@@ -1004,7 +1128,7 @@ const NotificationList = ({
 	const titleWidth =
 		stdout.columns - statusWidth - timeWidth - prStateWidth - padding - padding;
 
-	const items: Item[] = groups.flatMap((group) => {
+	const items = groups.flatMap((group) => {
 		const mostRecent = group.notifications.reduce((latest, notification) => {
 			return new Date(notification.updated_at) > new Date(latest.updated_at)
 				? notification
@@ -1120,6 +1244,8 @@ const NotificationList = ({
 					open(getWebUrl(item.value.data));
 				}
 			}}
+			onForceRefresh={onForceRefresh}
+			isRefreshing={isRefreshing}
 			limit={maxVisibleItems}
 			initialSelectedIndex={selectedIndex}
 			initialStartIndex={startIndex}
@@ -1145,34 +1271,11 @@ const App = () => {
 	const [currentUser, setCurrentUser] = useState<{ login: string } | null>(
 		null,
 	);
+	const [isRefreshing, setIsRefreshing] = useState(false);
 
-	useInput((input, key) => {
-		if (input === "q" || (key.ctrl && input === "c")) {
-			process.exit(0);
-		}
-	});
-
-	// Fetch user info when token is set
-	useEffect(() => {
-		const fetchUserInfo = async () => {
-			if (!token) return;
-
-			try {
-				const octokit = new Octokit({ auth: token });
-				const { data: user } = await octokit.users.getAuthenticated();
-				setCurrentUser(user);
-			} catch (err) {
-				console.error("Failed to fetch user info:", err);
-			}
-		};
-
-		void fetchUserInfo();
-	}, [token]);
-
-	useEffect(() => {
-		if (!token) return;
-
-		const groupNotifications = (notifications: GitHubNotification[]) => {
+	// Helper function to group notifications
+	const groupNotifications = useCallback(
+		(notifications: GitHubNotification[]) => {
 			const groupedNotifications = notifications.reduce(
 				(acc, notification) => {
 					const repoFullName = notification.repository.full_name;
@@ -1192,30 +1295,41 @@ const App = () => {
 					expanded: false,
 				}),
 			);
-		};
+		},
+		[],
+	);
 
-		const fetchNotifications = async () => {
+	// Function to fetch notifications
+	const fetchNotifications = useCallback(
+		async (forceRefresh = false) => {
+			if (!token) return;
+
 			setLoading(true);
 			setError(null);
+			setIsRefreshing(true);
 
 			try {
 				const octokit = new Octokit({ auth: token });
 				let page = 1;
 				let allNotifications: GitHubNotification[] = [];
-				const lastFetchTime = config.get("lastFetchTime") as string;
-				const cachedNotifications = config.get(
-					"notifications",
-				) as GitHubNotification[];
+				const lastFetchTime = forceRefresh
+					? new Date(0).toISOString()
+					: (config.get("lastFetchTime") as string);
+				const cachedNotifications = forceRefresh
+					? []
+					: (config.get("notifications") as GitHubNotification[]);
 
-				// Start with cached notifications
-				if (cachedNotifications.length > 0) {
+				// Start with cached notifications if not force refreshing
+				if (!forceRefresh && cachedNotifications.length > 0) {
 					allNotifications = cachedNotifications;
 					setGroups(groupNotifications(cachedNotifications));
 				}
 
 				// Fetch new notifications
 				while (true) {
-					setLoadingProgress(`Fetching new notifications (page ${page})...`);
+					setLoadingProgress(
+						`Fetching ${forceRefresh ? "all" : "new"} notifications (page ${page})...`,
+					);
 					const { data: notifications, headers } =
 						await octokit.activity.listNotificationsForAuthenticatedUser({
 							all: false,
@@ -1262,138 +1376,45 @@ const App = () => {
 			} finally {
 				setLoadingProgress(null);
 				setLoading(false);
+				setIsRefreshing(false);
 			}
-		};
+		},
+		[token, groupNotifications],
+	);
 
-		fetchNotifications();
-	}, [token]);
+	// Initial fetch effect
+	useEffect(() => {
+		void fetchNotifications(false);
+	}, [fetchNotifications]);
 
-	const handleNotificationSelect = async (notification: GitHubNotification) => {
-		setSelectedNotification(notification);
-	};
+	const handleForceRefresh = useCallback(() => {
+		if (!isRefreshing && !loading) {
+			void fetchNotifications(true);
+		}
+	}, [isRefreshing, loading, fetchNotifications]);
 
-	const handleNotificationBack = async (markAsRead?: boolean) => {
-		if (selectedNotification && markAsRead) {
-			// Optimistically update UI first
-			const updatedNotifications = (
-				config.get("notifications") as GitHubNotification[]
-			).filter((n) => n.id !== selectedNotification.id);
-			config.set("notifications", updatedNotifications);
+	useInput((input, key) => {
+		if (input === "q" || (key.ctrl && input === "c")) {
+			process.exit(0);
+		}
+	});
 
-			setGroups((prevGroups) => {
-				const newGroups = prevGroups.map((group) => ({
-					...group,
-					notifications: group.notifications.filter(
-						(n) => n.id !== selectedNotification.id,
-					),
-				}));
-				return newGroups.filter((group) => group.notifications.length > 0);
-			});
+	// Fetch user info when token is set
+	useEffect(() => {
+		const fetchUserInfo = async () => {
+			if (!token) return;
 
 			try {
 				const octokit = new Octokit({ auth: token });
-				await octokit.activity.markThreadAsRead({
-					thread_id: Number.parseInt(selectedNotification.id),
-				});
+				const { data: user } = await octokit.users.getAuthenticated();
+				setCurrentUser(user);
 			} catch (err) {
-				// If the API call fails, revert the optimistic update
-				config.set("notifications", [
-					...updatedNotifications,
-					selectedNotification,
-				]);
-				setGroups((prevGroups) => {
-					const targetGroup = prevGroups.find(
-						(group) => group.name === selectedNotification.repository.full_name,
-					);
-					if (targetGroup) {
-						return prevGroups.map((group) =>
-							group.name === selectedNotification.repository.full_name
-								? {
-										...group,
-										notifications: [
-											...group.notifications,
-											selectedNotification,
-										],
-									}
-								: group,
-						);
-					}
-					return [
-						...prevGroups,
-						{
-							name: selectedNotification.repository.full_name,
-							notifications: [selectedNotification],
-							expanded: true,
-						},
-					];
-				});
-				setError(err instanceof Error ? err.message : "Failed to mark as read");
+				console.error("Failed to fetch user info:", err);
 			}
-		}
-		setSelectedNotification(null);
-	};
+		};
 
-	const handleToggleGroup = (groupName: string) => {
-		setGroups((prevGroups) =>
-			prevGroups.map((group) =>
-				group.name === groupName
-					? { ...group, expanded: !group.expanded }
-					: group,
-			),
-		);
-	};
-
-	const handleMarkAsRead = async (notification: GitHubNotification) => {
-		// Optimistically update UI first
-		const updatedNotifications = (
-			config.get("notifications") as GitHubNotification[]
-		).filter((n) => n.id !== notification.id);
-		config.set("notifications", updatedNotifications);
-
-		setGroups((prevGroups) => {
-			const newGroups = prevGroups.map((group) => ({
-				...group,
-				notifications: group.notifications.filter(
-					(n) => n.id !== notification.id,
-				),
-			}));
-			return newGroups.filter((group) => group.notifications.length > 0);
-		});
-
-		try {
-			const octokit = new Octokit({ auth: token });
-			await octokit.activity.markThreadAsRead({
-				thread_id: Number.parseInt(notification.id),
-			});
-		} catch (err) {
-			// If the API call fails, revert the optimistic update
-			config.set("notifications", [...updatedNotifications, notification]);
-			setGroups((prevGroups) => {
-				const targetGroup = prevGroups.find(
-					(group) => group.name === notification.repository.full_name,
-				);
-				if (targetGroup) {
-					return prevGroups.map((group) =>
-						group.name === notification.repository.full_name
-							? {
-									...group,
-									notifications: [...group.notifications, notification],
-								}
-							: group,
-					);
-				}
-				return [
-					...prevGroups,
-					{
-						name: notification.repository.full_name,
-						notifications: [notification],
-						expanded: true,
-					},
-				];
-			});
-			setError(err instanceof Error ? err.message : "Failed to mark as read");
-		}
-	};
+		void fetchUserInfo();
+	}, [token]);
 
 	if (!token) {
 		return <TokenPrompt onToken={setToken} />;
@@ -1425,26 +1446,165 @@ const App = () => {
 		<Box flexDirection="column">
 			<Box marginBottom={1}>
 				<Text>🔔 GitHub Notifications (Press 'q' to exit)</Text>
+				{isRefreshing && (
+					<Text color="yellow">
+						{" "}
+						<Spinner type="dots" /> Refreshing...
+					</Text>
+				)}
 			</Box>
 			{groups.length === 0 ? (
 				<Text>No unread notifications!</Text>
 			) : selectedNotification ? (
 				<NotificationContent
 					notification={selectedNotification}
-					onBack={handleNotificationBack}
+					onBack={async (markAsRead?: boolean) => {
+						if (markAsRead) {
+							// Optimistically update UI first
+							const updatedNotifications = (
+								config.get("notifications") as GitHubNotification[]
+							).filter((n) => n.id !== selectedNotification.id);
+							config.set("notifications", updatedNotifications);
+
+							setGroups((prevGroups) => {
+								const newGroups = prevGroups.map((group) => ({
+									...group,
+									notifications: group.notifications.filter(
+										(n) => n.id !== selectedNotification.id,
+									),
+								}));
+								return newGroups.filter(
+									(group) => group.notifications.length > 0,
+								);
+							});
+
+							try {
+								const octokit = new Octokit({ auth: token });
+								await octokit.activity.markThreadAsRead({
+									thread_id: Number.parseInt(selectedNotification.id),
+								});
+							} catch (err) {
+								// If the API call fails, revert the optimistic update
+								config.set("notifications", [
+									...updatedNotifications,
+									selectedNotification,
+								]);
+								setGroups((prevGroups) => {
+									const targetGroup = prevGroups.find(
+										(group) =>
+											group.name === selectedNotification.repository.full_name,
+									);
+									if (targetGroup) {
+										return prevGroups.map((group) =>
+											group.name === selectedNotification.repository.full_name
+												? {
+														...group,
+														notifications: [
+															...group.notifications,
+															selectedNotification,
+														],
+													}
+												: group,
+										);
+									}
+									return [
+										...prevGroups,
+										{
+											name: selectedNotification.repository.full_name,
+											notifications: [selectedNotification],
+											expanded: true,
+										},
+									];
+								});
+								setError(
+									err instanceof Error ? err.message : "Failed to mark as read",
+								);
+							}
+						}
+						setSelectedNotification(null);
+					}}
 				/>
 			) : (
 				<NotificationList
 					groups={groups}
-					onSelect={handleNotificationSelect}
-					onToggleGroup={handleToggleGroup}
-					onMarkAsRead={handleMarkAsRead}
+					onSelect={(notification) => {
+						setSelectedNotification(notification);
+					}}
+					onToggleGroup={(groupName) => {
+						setGroups((prevGroups) =>
+							prevGroups.map((group) =>
+								group.name === groupName
+									? { ...group, expanded: !group.expanded }
+									: group,
+							),
+						);
+					}}
+					onMarkAsRead={async (notification) => {
+						// Optimistically update UI first
+						const updatedNotifications = (
+							config.get("notifications") as GitHubNotification[]
+						).filter((n) => n.id !== notification.id);
+						config.set("notifications", updatedNotifications);
+
+						setGroups((prevGroups) => {
+							const newGroups = prevGroups.map((group) => ({
+								...group,
+								notifications: group.notifications.filter(
+									(n) => n.id !== notification.id,
+								),
+							}));
+							return newGroups.filter(
+								(group) => group.notifications.length > 0,
+							);
+						});
+
+						try {
+							const octokit = new Octokit({ auth: token });
+							await octokit.activity.markThreadAsRead({
+								thread_id: Number.parseInt(notification.id),
+							});
+						} catch (err) {
+							// If the API call fails, revert the optimistic update
+							config.set("notifications", [
+								...updatedNotifications,
+								notification,
+							]);
+							setGroups((prevGroups) => {
+								const targetGroup = prevGroups.find(
+									(group) => group.name === notification.repository.full_name,
+								);
+								if (targetGroup) {
+									return prevGroups.map((group) =>
+										group.name === notification.repository.full_name
+											? {
+													...group,
+													notifications: [...group.notifications, notification],
+												}
+											: group,
+									);
+								}
+								return [
+									...prevGroups,
+									{
+										name: notification.repository.full_name,
+										notifications: [notification],
+										expanded: true,
+									},
+								];
+							});
+							setError(
+								err instanceof Error ? err.message : "Failed to mark as read",
+							);
+						}
+					}}
 					selectedIndex={listPosition.selectedIndex}
 					startIndex={listPosition.startIndex}
-					onIndexChange={(selectedIndex, startIndex) =>
-						setListPosition({ selectedIndex, startIndex })
-					}
+					onIndexChange={(selectedIndex, startIndex) => {
+						setListPosition({ selectedIndex, startIndex });
+					}}
 					currentUser={currentUser}
+					onForceRefresh={handleForceRefresh}
+					isRefreshing={isRefreshing}
 				/>
 			)}
 		</Box>
