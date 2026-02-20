@@ -1372,7 +1372,17 @@ const App = () => {
 
 				setGroups(groupNotifications(allNotifications));
 			} catch (err) {
-				setError(err instanceof Error ? err.message : "Unknown error occurred");
+				// If the token is invalid (401) or lacks permissions (403), clear it
+				// so the user gets the token prompt again
+				const status = (err as { status?: number }).status;
+				if (status === 401 || status === 403) {
+					config.set("githubToken", "");
+					setToken(null);
+				} else {
+					setError(
+						err instanceof Error ? err.message : "Unknown error occurred",
+					);
+				}
 			} finally {
 				setLoadingProgress(null);
 				setLoading(false);
@@ -1409,7 +1419,11 @@ const App = () => {
 				const { data: user } = await octokit.users.getAuthenticated();
 				setCurrentUser(user);
 			} catch (err) {
-				console.error("Failed to fetch user info:", err);
+				const status = (err as { status?: number }).status;
+				if (status === 401 || status === 403) {
+					config.set("githubToken", "");
+					setToken(null);
+				}
 			}
 		};
 
