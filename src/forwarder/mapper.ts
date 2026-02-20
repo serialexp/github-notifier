@@ -52,6 +52,20 @@ function formatSubjectType(type: string): string {
 	return type.replace(/([A-Z])/g, " $1").trim().toLowerCase();
 }
 
+export function shouldForward(
+	notification: GitHubNotification,
+	excludeOrgs: string[],
+	excludeRepos: string[],
+): boolean {
+	const repo = notification.repository.full_name;
+	const org = notification.repository.owner.login;
+
+	if (excludeRepos.includes(repo)) return false;
+	if (excludeOrgs.includes(org)) return false;
+
+	return true;
+}
+
 export function mapNotification(
 	notification: GitHubNotification,
 	source: string,

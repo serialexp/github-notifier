@@ -1,8 +1,16 @@
 import { Octokit } from "@octokit/rest";
 import { fetchNewNotifications } from "./github.ts";
 import { sendNotification } from "./notifier.ts";
-import { mapNotification } from "./mapper.ts";
+import { mapNotification, shouldForward } from "./mapper.ts";
 import type { ForwarderConfig } from "./types.ts";
+
+function parseList(value: string | undefined): string[] {
+	if (!value) return [];
+	return value
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean);
+}
 
 function loadConfig(): ForwarderConfig {
 	const githubToken = process.env.GITHUB_TOKEN;
@@ -11,6 +19,8 @@ function loadConfig(): ForwarderConfig {
 	const pollIntervalSeconds =
 		Number(process.env.POLL_INTERVAL_SECONDS) || 60;
 	const source = process.env.NOTIFIER_SOURCE || "github";
+	const excludeOrgs = parseList(process.env.EXCLUDE_ORGS);
+	const excludeRepos = parseList(process.env.EXCLUDE_REPOS);
 
 	if (!githubToken) throw new Error("GITHUB_TOKEN is required");
 	if (!crossNotifierUrl) throw new Error("CROSS_NOTIFIER_URL is required");
@@ -23,6 +33,8 @@ function loadConfig(): ForwarderConfig {
 		crossNotifierSecret,
 		pollIntervalSeconds,
 		source,
+		excludeOrgs,
+		excludeRepos,
 	};
 }
 
@@ -38,6 +50,10 @@ async function main() {
 	);
 	console.log(`[forwarder] Target: ${config.crossNotifierUrl}`);
 	console.log(`[forwarder] Source: ${config.source}`);
+	if (config.excludeOrgs.length > 0)
+		console.log(`[forwarder] Excluding orgs: ${config.excludeOrgs.join(", ")}`);
+	if (config.excludeRepos.length > 0)
+		console.log(`[forwarder] Excluding repos: ${config.excludeRepos.join(", ")}`);
 
 	const poll = async () => {
 		try {
@@ -47,7 +63,9 @@ async function main() {
 			);
 
 			const newNotifications = notifications.filter(
-				(n) => !forwarded.has(n.id),
+				(n) =>
+					!forwarded.has(n.id) &&
+					shouldForward(n, config.excludeOrgs, config.excludeRepos),
 			);
 
 			if (newNotifications.length > 0) {

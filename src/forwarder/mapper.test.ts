@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mapNotification } from "./mapper";
+import { mapNotification, shouldForward } from "./mapper";
 import type { GitHubNotification } from "./types";
 
 function makeNotification(
@@ -163,5 +163,37 @@ describe("mapNotification", () => {
 		const payload = mapNotification(notification, "github");
 		expect(payload.message).toContain("ci activity");
 		expect(payload.status).toBe("info");
+	});
+});
+
+describe("shouldForward", () => {
+	it("forwards when no exclusions are set", () => {
+		const notification = makeNotification({ repoFullName: "acme/app", ownerLogin: "acme" });
+		expect(shouldForward(notification, [], [])).toBe(true);
+	});
+
+	it("excludes by org", () => {
+		const notification = makeNotification({ repoFullName: "work-corp/api", ownerLogin: "work-corp" });
+		expect(shouldForward(notification, ["work-corp"], [])).toBe(false);
+	});
+
+	it("excludes by repo", () => {
+		const notification = makeNotification({ repoFullName: "acme/secret", ownerLogin: "acme" });
+		expect(shouldForward(notification, [], ["acme/secret"])).toBe(false);
+	});
+
+	it("forwards non-matching org", () => {
+		const notification = makeNotification({ repoFullName: "personal/app", ownerLogin: "personal" });
+		expect(shouldForward(notification, ["work-corp"], [])).toBe(true);
+	});
+
+	it("forwards non-matching repo", () => {
+		const notification = makeNotification({ repoFullName: "acme/app", ownerLogin: "acme" });
+		expect(shouldForward(notification, [], ["acme/secret"])).toBe(true);
+	});
+
+	it("excludes when both org and repo lists are set", () => {
+		const notification = makeNotification({ repoFullName: "work-corp/api", ownerLogin: "work-corp" });
+		expect(shouldForward(notification, ["work-corp"], ["other/repo"])).toBe(false);
 	});
 });

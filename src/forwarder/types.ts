@@ -9,6 +9,8 @@ export interface ForwarderConfig {
 	crossNotifierSecret: string;
 	pollIntervalSeconds: number;
 	source: string;
+	excludeOrgs: string[];
+	excludeRepos: string[];
 }
 
 export interface CrossNotifierPayload {
