@@ -1,0 +1,10 @@
+services:
+  github-forwarder:
+    build: .
+    restart: unless-stopped
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - CROSS_NOTIFIER_URL=${CROSS_NOTIFIER_URL}
+      - CROSS_NOTIFIER_SECRET=${CROSS_NOTIFIER_SECRET}
+      - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-60}
+      - NOTIFIER_SOURCE=${NOTIFIER_SOURCE:-github}

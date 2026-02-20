@@ -2,35 +2,35 @@ name: Test
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [16.x, 18.x, 20.x]
+        node-version: [18.x, 20.x, 22.x]
 
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          
-      - uses: pnpm/action-setup@v2
-        with:
-          version: 8
-          
+
+      - uses: pnpm/action-setup@v4
+
       - name: Install dependencies
         run: pnpm install
-        
+
       - name: Build
         run: pnpm run build
-        
-      # Add these steps once we have tests
-      # - name: Run tests
-      #   run: pnpm test 
+
+      - name: Build forwarder
+        run: pnpm run build:forwarder
+
+      - name: Run tests
+        run: pnpm test
