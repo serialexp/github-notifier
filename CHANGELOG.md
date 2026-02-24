@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1 (2026-02-24)
+
+### Bug Fixes
+
+- add id-token permission to publish workflow
+
 ## 1.1.0 (2026-02-20)
 
 ### Features
