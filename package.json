@@ -1,6 +1,6 @@
 {
   "name": "github-notifier-cli",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A beautiful terminal UI for managing GitHub notifications",
   "module": "index.tsx",
   "type": "module",
