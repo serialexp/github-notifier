@@ -5,16 +5,15 @@ on:
     branches:
       - main
 
-permissions:
-  contents: write
-  id-token: write
-
 jobs:
-  publish:
+  publish-npm:
     runs-on: ubuntu-latest
     if: >-
       startsWith(github.event.head_commit.message, 'release:') ||
       (startsWith(github.event.head_commit.message, 'Merge') && contains(github.event.head_commit.message, 'release/'))
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -28,15 +27,37 @@ jobs:
 
       - run: pnpm install
       - run: pnpm run build
+
+      - run: pnpm publish --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub release
+        run: pnpm just-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-docker:
+    runs-on: ubuntu-latest
+    if: >-
+      startsWith(github.event.head_commit.message, 'release:') ||
+      (startsWith(github.event.head_commit.message, 'Merge') && contains(github.event.head_commit.message, 'release/'))
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+          cache: "pnpm"
+
+      - run: pnpm install
       - run: pnpm run build:forwarder
 
       - name: Get version from package.json
         id: version
         run: echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
-
-      - run: pnpm publish --access public --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -54,8 +75,3 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/github-notifier-forwarder:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/github-notifier-forwarder:${{ steps.version.outputs.version }}
-
-      - name: Create GitHub release
-        run: pnpm just-release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
